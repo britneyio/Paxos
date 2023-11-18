@@ -18,6 +18,9 @@ type proposal struct {
 }
 
 var (
+	file             string
+	startDelay       float64
+	value            string
 	hosts            []string
 	PORT             = "4950"
 	isProposer       bool
@@ -67,6 +70,16 @@ func gethosts(filename string) {
 	acceptorMap = make(map[string]int)
 	proposerMap = make(map[string]int)
 	learnerMap = make(map[string]int)
+
+	// processNumbers 1, 2
+	// proposerMap : {1 : peer1, 2 : peer5}
+	// acceptorMap : {1 : [peer1, peer2, peer3], 2 : [peer1, peer2, peer3]}
+	// learnerMap : {}
+
+	// or
+
+	// proposerMap : { peer1 : 1, peer5 : 2}
+	// acceptorMap : {peer1 : 1, peer2L}
 
 	// Create a scanner to read the file line by line
 	scanner := bufio.NewScanner(file)
@@ -122,6 +135,10 @@ func gethosts(filename string) {
 				learnerMap[peer_name] = roleNumber
 			}
 		}
+
+		// fmt.Fprintln(os.Stdout, proposerMap)
+		// fmt.Fprintln(os.Stdout, acceptorMap)
+		// fmt.Fprintln(os.Stdout, learnerMap)
 
 	}
 
@@ -180,12 +197,17 @@ func bytesToProposal(data []byte) proposal {
 func sendValue(peer string, prop proposal) {
 	var SERVER_TYPE = "tcp"
 
-	fmt.Fprintf(os.Stderr, "%s", peer)
 	addr, err := net.ResolveTCPAddr(SERVER_TYPE, peer+":"+PORT)
-	checkIfError(err, "Error resolving address:")
+	if err != nil {
+		fmt.Println("Error resolving address:", err)
+		return
+	}
 
 	connection, err := net.DialTCP(SERVER_TYPE, nil, addr)
-	checkIfError(err, "Error connecting:")
+	if err != nil {
+		fmt.Println("Error connecting:", err)
+		return
+	}
 
 	proposalBytes := proposalToBytes(prop)
 
@@ -247,6 +269,7 @@ func prepare(v rune) {
 			processNumbers = append(processNumbers, value)
 		}
 	}
+	fmt.Fprintln(os.Stdout, acceptorMap)
 
 	for peer, value := range acceptorMap {
 		for _, val := range processNumbers {
