@@ -1,0 +1,5 @@
+I decided on using maps for the keeping track of each of the roles, so in each the peer will have a list of 
+its processes that its connected to. So if a peer is an acceptor1 and acceptor2 it will be in the acceptorMap, the name
+as the key and the value is a list containing the 1,2. I did this so I could easily just check that peer and which processes it is in. 
+I created a proposal struct to contain the proposal id and the value. I later added the serverId, because there seemed to problems when
+acceptors responding back. 

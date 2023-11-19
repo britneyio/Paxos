@@ -13,28 +13,27 @@ import (
 )
 
 type proposal struct {
-	id    int
-	value rune
+	id       int
+	value    rune
+	serverId string
 }
 
 var (
-	file             string
-	startDelay       float64
-	value            string
 	hosts            []string
 	PORT             = "4950"
 	isProposer       bool
 	isAcceptor       bool
 	isLearner        bool
-	minProposal      int
-	acceptorMap      map[string]int
-	proposerMap      map[string]int
-	learnerMap       map[string]int
+	minProposal      = 0
+	acceptorMap      map[string][]int
+	proposerMap      map[string][]int
+	learnerMap       map[string][]int
 	acceptedProposal proposal
 	acceptances      int
 	myProposal       proposal
 	processNumbers   []int
 	hostname         string
+	proposalVotes    map[proposal]int
 )
 
 func checkIfError(e error, message string) {
@@ -65,21 +64,12 @@ func gethosts(filename string) {
 	defer file.Close()
 
 	hostname, err = os.Hostname()
+	// fmt.Fprintf(os.Stderr, "hostname: %s\n", hostname)
 	checkIfError(err, "Error getting hostname:")
 
-	acceptorMap = make(map[string]int)
-	proposerMap = make(map[string]int)
-	learnerMap = make(map[string]int)
-
-	// processNumbers 1, 2
-	// proposerMap : {1 : peer1, 2 : peer5}
-	// acceptorMap : {1 : [peer1, peer2, peer3], 2 : [peer1, peer2, peer3]}
-	// learnerMap : {}
-
-	// or
-
-	// proposerMap : { peer1 : 1, peer5 : 2}
-	// acceptorMap : {peer1 : 1, peer2L}
+	acceptorMap = make(map[string][]int)
+	proposerMap = make(map[string][]int)
+	learnerMap = make(map[string][]int)
 
 	// Create a scanner to read the file line by line
 	scanner := bufio.NewScanner(file)
@@ -127,12 +117,12 @@ func gethosts(filename string) {
 
 			switch {
 			case strings.Contains(r, "proposer"):
-				proposerMap[peer_name] = roleNumber
+				proposerMap[peer_name] = append(proposerMap[peer_name], roleNumber)
 
 			case strings.Contains(r, "acceptor"):
-				acceptorMap[peer_name] = roleNumber
+				acceptorMap[peer_name] = append(acceptorMap[peer_name], roleNumber)
 			case strings.Contains(r, "learner"):
-				learnerMap[peer_name] = roleNumber
+				learnerMap[peer_name] = append(learnerMap[peer_name], roleNumber)
 			}
 		}
 
@@ -144,15 +134,7 @@ func gethosts(filename string) {
 
 }
 
-func listen() {
-	var (
-		SERVER_HOST = hostname
-		SERVER_PORT = "4950"
-		SERVER_TYPE = "tcp"
-	)
-	// fmt.Fprintln(os.Stderr, "Server Running...")
-	listener, err := net.Listen(SERVER_TYPE, SERVER_HOST+":"+SERVER_PORT)
-	checkIfError(err, "Error listening:")
+func listen(listener net.Listener) {
 	defer listener.Close()
 	// fmt.Println(os.Stderr, "Listening on ")
 	// fmt.Println(os.Stderr, "Waiting for client...")
@@ -183,13 +165,13 @@ func listen() {
 // Convert proposal to byte slice
 
 func proposalToBytes(p proposal) []byte {
-	return []byte(fmt.Sprintf("%d,%c", p.id, p.value))
+	return []byte(fmt.Sprintf("%d,%c,%s", p.id, p.value, p.serverId))
 }
 
 // Convert byte slice to proposal
 func bytesToProposal(data []byte) proposal {
 	var p proposal
-	fmt.Sscanf(string(data), "%d,%c", &p.id, &p.value)
+	fmt.Sscanf(string(data), "%d,%c,%s", &p.id, &p.value, &p.serverId)
 	return p
 }
 
@@ -258,51 +240,57 @@ func receiveValue(connection net.Conn, peerName string) {
 
 // proposer method propose to acceptors
 func prepare(v rune) {
-	myProposal := proposal{
-		id:    minProposal + 1,
-		value: rune(v),
+	myProposal = proposal{
+		id:       minProposal + 1,
+		value:    v,
+		serverId: hostname,
 	}
-
-	var processNumbers []int
-	for key, value := range proposerMap {
-		if key == hostname {
-			processNumbers = append(processNumbers, value)
-		}
-	}
-	fmt.Fprintln(os.Stdout, acceptorMap)
+	proposalVotes = make(map[proposal]int)
+	proposalVotes[myProposal] = 0
+	processNumbers := proposerMap[hostname] // Use the proposerMap directly for the current host
+	// fmt.Fprintln(os.Stdout, acceptorMap)
 
 	for peer, value := range acceptorMap {
-		for _, val := range processNumbers {
-			if val == value {
-				fmt.Fprintf(os.Stderr, "[Proposer] Prepare {id: %d, value: %c} to %s\n", myProposal.id, myProposal.value, peer)
+		for _, val := range value {
+			if contains(processNumbers, val) {
+				fmt.Fprintf(os.Stderr, "[Proposer] [Prepare] {id: %d, value: %c, serverId: %s} to %s\n", myProposal.id, myProposal.value, myProposal.serverId, peer)
 				sendValue(peer, myProposal)
-
 			}
 		}
 	}
+}
 
+func contains(list []int, value int) bool {
+	for _, v := range list {
+		if v == value {
+			return true
+		}
+	}
+	return false
 }
 
 // acceptors waiting for proposals
 // acceptor method accepts first proposal it receives and rejects the rest
 func accepting(prop proposal, peerName string) {
-	fmt.Fprintf(os.Stderr, "[Acceptor] [Recv] {id: %d, value: %c} from %s\n", myProposal.id, myProposal.value, peerName)
-
+	fmt.Fprintf(os.Stderr, "[Acceptor] [Recv] {id: %d, value: %c, serverId: %s} from %s\n", prop.id, prop.value, prop.serverId, peerName)
+	// fmt.Fprintf(os.Stderr, "prop id: %d\n", prop.id)
 	if prop.id > minProposal {
-		minProposal = prop.id
 		acceptedProposal = proposal{
-			id:    prop.id,
-			value: prop.value,
+			id:       prop.id,
+			value:    prop.value,
+			serverId: prop.serverId,
 		}
+		minProposal = prop.id
+
 	}
 
-	send_acceptance(acceptedProposal, peerName)
+	send_acceptance(acceptedProposal, prop.serverId)
 
 }
 
 // acceptor method send back to proposers
 func send_acceptance(prop proposal, peerName string) {
-	fmt.Fprintf(os.Stderr, "[Acceptor] [Sent] {id: %d, value: %c} to %s\n", myProposal.id, myProposal.value, peerName)
+	fmt.Fprintf(os.Stderr, "[Acceptor] [Sent] {id: %d, value: %c, serverId: %s} to %s\n", prop.id, prop.value, prop.serverId, peerName)
 	sendValue(peerName, prop)
 
 }
@@ -310,29 +298,25 @@ func send_acceptance(prop proposal, peerName string) {
 // proposer method
 // receieve response from acceptors
 func receives_acceptor(prop proposal, peerName string) {
-	fmt.Fprintf(os.Stderr, "[Proposer] [Recv] {id: %d, value: %c} from %s \n", myProposal.id, myProposal.value, peerName)
+	fmt.Fprintf(os.Stderr, "[Proposer] [Recv] {id: %d, value: %c} from %s \n", prop.id, prop.value, peerName)
 
-	if prop.id == myProposal.id {
-		acceptances++
-	}
+	proposalVotes[prop]++
 
-	var processNumbers []int
-	for key, value := range proposerMap {
-		if key == hostname {
-			processNumbers = append(processNumbers, value)
-		}
-	}
+	//fmt.Fprintf(os.Stderr, "accept")
 
-	targetAcceptances := len(acceptorMap)/2 + 1
-	fmt.Fprintf(os.Stderr, "%d", targetAcceptances)
-
-	for peer, value := range learnerMap {
-		for _, val := range processNumbers {
-			if val == value && acceptances == targetAcceptances {
-				send_learners(myProposal, peer)
-				break
+	for propv, count := range proposalVotes {
+		if count >= len(acceptorMap)/2+1 {
+			// Proposal has a majority, send it to matching learners
+			//send_learners(prop, learnerMap)
+			for peer, values := range learnerMap {
+				// if identifier is same as host
+				if contains(values, proposerMap[hostname][0]) {
+					send_learners(propv, peer)
+				}
 
 			}
+			fmt.Fprintf(os.Stderr, "[Proposer] [Accept] {id: %d, value: %c} \n", propv.id, propv.value)
+
 		}
 	}
 
@@ -340,13 +324,14 @@ func receives_acceptor(prop proposal, peerName string) {
 
 // proposer method send chosen value to learners
 func send_learners(prop proposal, peerName string) {
-	fmt.Fprintf(os.Stderr, "[Proposer] [Sent]  {id: %d, value: %c} to %s\n", myProposal.id, myProposal.value, peerName)
+	fmt.Fprintf(os.Stderr, "[Proposer] [Sent]  {id: %d, value: %c} to %s\n", prop.id, prop.value, peerName)
 	sendValue(peerName, prop)
 }
 
 // learner method accept from proposer
 func accept_from_proposer(prop proposal, peerName string) {
-	fmt.Fprintf(os.Stderr, "[Learner] [Recv] {id: %d, value: %c} to %s\n", myProposal.id, myProposal.value, peerName)
+	fmt.Fprintf(os.Stderr, "[Learner] [Recv] {id: %d, value: %c} to %s\n", prop.id, prop.value, peerName)
+	fmt.Fprintf(os.Stderr, "[Learner] [Accept] {id: %d, value: %c} to %s\n", prop.id, prop.value, peerName)
 
 }
 
@@ -365,17 +350,30 @@ func main() {
 	var v rune
 	if utf8.RuneCountInString(*value) == 1 {
 		v, _ = utf8.DecodeRuneInString(*value)
-		fmt.Printf("Value as rune: %c\n", v)
+		// fmt.Printf("Value as rune: %c\n", v)
 	}
 
 	duration := time.Duration(*propose_delay) * time.Second
+	var (
+		SERVER_HOST = hostname
+		SERVER_PORT = "4950"
+		SERVER_TYPE = "tcp"
+	)
+
+	// fmt.Fprintln(os.Stderr, "Server Running...")
+	listener, err := net.Listen(SERVER_TYPE, SERVER_HOST+":"+SERVER_PORT)
+	checkIfError(err, "Error listening:")
+
+	go listen(listener)
 
 	if isProposer {
-		fmt.Fprintln(os.Stderr, "Sending prepare")
+		// fmt.Fprintln(os.Stderr, "Sending prepare")
+		// give time for other peers to get online
+		time.Sleep(2 * time.Second)
 		time.Sleep(duration)
 		prepare(v)
 	}
 
-	listen()
+	select {}
 
 }
